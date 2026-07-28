@@ -4,6 +4,13 @@ import { ThreatSignal } from '../types';
 export class GitHubCollector {
   private baseUrl = 'https://api.github.com/advisories';
 
+  private normalizeEcosystem(ecosystem: string | undefined): string | undefined {
+    if (!ecosystem) return undefined;
+    const normalized = ecosystem.toLowerCase();
+    if (normalized === 'pypi') return 'pip';
+    return normalized;
+  }
+
   async collect(limit: number = 10): Promise<ThreatSignal[]> {
     try {
       // Get advisories published in the last 24 hours
@@ -33,15 +40,30 @@ export class GitHubCollector {
         }
         
         const severity = advisory.severity?.toLowerCase() || 'medium';
-        
-        signals.push({
-          id: advisory.ghsa_id,
-          source: 'GitHub Security',
-          severity: this.mapGitHubSeverity(severity),
-          description: advisory.summary || advisory.description || 'No description available',
-          remediation: `Review advisory: ${advisory.html_url}\nUpdate affected packages if available.`,
-          timestamp: new Date(advisory.updated_at || advisory.published_at)
-        });
+        const vulnerabilities = advisory.vulnerabilities || [];
+
+        // Emit one signal per vulnerable third-party package for precise filtering/routing.
+        for (const vulnerability of vulnerabilities) {
+          const ecosystem = this.normalizeEcosystem(vulnerability?.package?.ecosystem);
+          const packageName = vulnerability?.package?.name;
+
+          if (!ecosystem || !packageName) {
+            continue;
+          }
+
+          signals.push({
+            id: `${advisory.ghsa_id}:${ecosystem}:${packageName}`,
+            source: 'GitHub Security',
+            severity: this.mapGitHubSeverity(severity),
+            description: advisory.summary || advisory.description || 'No description available',
+            remediation: `Review advisory: ${advisory.html_url}\nUpdate affected package ${packageName} (${ecosystem}) to a fixed version.`,
+            ecosystem,
+            packageName,
+            category: 'package_advisory',
+            referenceUrl: advisory.html_url,
+            timestamp: new Date(advisory.updated_at || advisory.published_at)
+          });
+        }
       }
 
       return signals;

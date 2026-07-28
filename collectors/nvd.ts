@@ -41,6 +41,7 @@ export class NVDCollector {
           severity: this.mapCVSSToSeverity(baseScore),
           description: cve.descriptions?.find((d: any) => d.lang === 'en')?.value || 'No description available',
           remediation: `Review and apply security patches for ${cve.id}`,
+          referenceUrl: `https://nvd.nist.gov/vuln/detail/${cve.id}`,
           timestamp: new Date()
         });
       }
