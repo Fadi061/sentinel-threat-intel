@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import Redis from 'ioredis';
 
-const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
+const redisUrl = process.env.REDIS_URL || 'redis://localhost:6380';
 const client = new Redis(redisUrl);
 
 async function clearCache() {

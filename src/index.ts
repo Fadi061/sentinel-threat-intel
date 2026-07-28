@@ -4,6 +4,7 @@ import { RedisService } from '../services/redis';
 import { SlackService } from '../services/slack';
 import { NVDCollector } from '../collectors/nvd';
 import { GitHubCollector } from '../collectors/github';
+import { FeedsCollector } from '../collectors/feeds';
 import { ThreatSignal } from '../types';
 
 class ThreatIntelService {
@@ -11,9 +12,10 @@ class ThreatIntelService {
   private slack: SlackService;
   private nvdCollector: NVDCollector;
   private githubCollector: GitHubCollector;
+  private feedsCollector: FeedsCollector;
 
   constructor() {
-    const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
+    const redisUrl = process.env.REDIS_URL || 'redis://localhost:6380';
     const slackToken = process.env.SLACK_TOKEN;
     const slackChannel = process.env.SLACK_CHANNEL || '#security-threat-intel-alerts';
 
@@ -25,19 +27,39 @@ class ThreatIntelService {
     this.slack = new SlackService(slackToken, slackChannel);
     this.nvdCollector = new NVDCollector();
     this.githubCollector = new GitHubCollector();
+    this.feedsCollector = new FeedsCollector();
+  }
+
+  private shouldAlert(signal: ThreatSignal): boolean {
+    // Explicit rule: send all configured feed-site intel updates to the same Slack channel.
+    if (signal.category === 'intel_feed') {
+      return true;
+    }
+
+    // Alert policy: only critical vulnerabilities that target third-party packages.
+    if (signal.severity !== 'critical') {
+      return false;
+    }
+
+    if (!signal.ecosystem || !signal.packageName) {
+      return false;
+    }
+
+    return true;
   }
 
   async processSignal(signal: ThreatSignal): Promise<void> {
     try {
-      // Only process critical and high severity threats
-      if (signal.severity !== 'critical' && signal.severity !== 'high') {
+      if (!this.shouldAlert(signal)) {
         return;
       }
 
       const isDuplicate = await this.redis.isDuplicate(signal.id);
       
       if (isDuplicate) {
-        console.log(`Skipping duplicate signal: ${signal.id}`);
+        if (signal.category !== 'intel_feed') {
+          console.log(`Skipping duplicate signal: ${signal.id}`);
+        }
         return;
       }
 
@@ -60,12 +82,13 @@ class ThreatIntelService {
     console.log('Starting threat intelligence collection...');
     
     try {
-      const [nvdSignals, githubSignals] = await Promise.all([
+      const [nvdSignals, githubSignals, feedSignals] = await Promise.all([
         this.nvdCollector.collect(5),
-        this.githubCollector.collect(5)
+        this.githubCollector.collect(5),
+        this.feedsCollector.collect(3)
       ]);
 
-      const allSignals = [...nvdSignals, ...githubSignals];
+      const allSignals = [...nvdSignals, ...githubSignals, ...feedSignals];
       console.log(`Collected ${allSignals.length} signals`);
 
       for (const signal of allSignals) {
@@ -76,12 +99,15 @@ class ThreatIntelService {
     }
   }
 
-  start(): void {
+  async start(): Promise<void> {
     console.log('Starting Sentinel Threat Intel service...');
-    
+
+    await this.slack.validateConnection();
+    console.log('Slack authentication validated');
+
     // Run immediately on start
-    this.runCollection();
-    
+    await this.runCollection();
+
     // Then run every hour
     cron.schedule('0 * * * *', () => {
       this.runCollection();
@@ -97,7 +123,11 @@ class ThreatIntelService {
 }
 
 const service = new ThreatIntelService();
-service.start();
+service.start().catch((error: any) => {
+  const errorMsg = error?.message || error?.toString() || 'Unknown startup error';
+  console.error(`Startup error: ${errorMsg}`);
+  process.exit(1);
+});
 
 process.on('SIGINT', async () => {
   await service.shutdown();

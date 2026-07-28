@@ -4,6 +4,10 @@ export interface ThreatSignal {
   severity: 'low' | 'medium' | 'high' | 'critical';
   description: string;
   remediation: string;
+  ecosystem?: string;
+  packageName?: string;
+  category?: 'package_advisory' | 'intel_feed';
+  referenceUrl?: string;
   timestamp?: Date;
 }
 
